@@ -35,6 +35,8 @@ export default function Productos() {
     const [precioCompra, setPrecioCompra] = useState("")
     const [pvp, setPvp] = useState("")
     const [isSaving, setIsSaving] = useState(false)
+    const [editingId, setEditingId] = useState<string | null>(null)
+    const [stockEdit, setStockEdit] = useState("")
 
     useEffect(() => {
         const checkAuthAndLoadData = async () => {
@@ -75,7 +77,7 @@ export default function Productos() {
         const calcGanancia = targetPvp - calcPrecioConTax
 
         const nuevoProducto = {
-            categoria, // Campo nuevo guardado en BDD
+            categoria,
             tienda,
             marca,
             color: color || null,
@@ -84,27 +86,56 @@ export default function Productos() {
             precio_compra_marcado: prec,
             precio_compra_mas_tax: calcPrecioConTax,
             compra_total: calcCompraTotal,
-            stock: cat,
+            // Si estmos editando, se setea el stock a lo que puso en el cajón de Stock Actual. Si es nuevo, es igual a cantidad original.
+            stock: editingId ? parseInt(stockEdit) : cat,
             pvp: targetPvp,
             ganancia: calcGanancia
         }
 
-        const { error } = await supabase.from("productos").insert([nuevoProducto])
+        let error;
+        if (editingId) {
+            const { error: updateError } = await supabase.from("productos").update(nuevoProducto).eq("id", editingId)
+            error = updateError
+        } else {
+            const { "error": insertError } = await supabase.from("productos").insert([nuevoProducto])
+            error = insertError
+        }
 
         if (error) {
             alert("Error al guardar: " + error.message)
         } else {
-            // Limpiar formulario y recargar tabla (no limpiamos categoria para rapidez)
-            setTienda("")
-            setMarca("")
-            setColor("")
-            setProducto("")
-            setCantidad("")
-            setPrecioCompra("")
-            setPvp("")
+            cancelarEdicion()
             fetchProductos()
         }
         setIsSaving(false)
+    }
+
+    const cargarParaEditar = (p: Producto) => {
+        setCategoria(p.categoria || "Maquillaje")
+        setTienda(p.tienda)
+        setMarca(p.marca)
+        setColor(p.color || "")
+        setProducto(p.producto)
+        setCantidad(p.cantidad.toString())
+        setPrecioCompra(p.precio_compra_marcado.toString())
+        setPvp(p.pvp.toString())
+        setEditingId(p.id)
+        setStockEdit(p.stock.toString())
+        
+        // Hacer scroll automático al formulario
+        window.scrollTo({ top: 0, behavior: "smooth" })
+    }
+
+    const cancelarEdicion = () => {
+        setTienda("")
+        setMarca("")
+        setColor("")
+        setProducto("")
+        setCantidad("")
+        setPrecioCompra("")
+        setPvp("")
+        setEditingId(null)
+        setStockEdit("")
     }
 
     const eliminarProducto = async (id: string) => {
@@ -152,8 +183,10 @@ export default function Productos() {
             </header>
 
             {/* FORMULARIO */}
-            <form onSubmit={guardarProducto} className="glass-panel p-6 rounded-2xl mb-8">
-                <h2 className="text-xl font-bold mb-6 text-white border-b border-slate-700 pb-2">➕ Nuevo Producto</h2>
+            <form onSubmit={guardarProducto} className={`glass-panel p-6 rounded-2xl mb-8 ${editingId ? 'border border-amber-500 shadow-[0_0_20px_rgba(245,158,11,0.1)]' : ''}`}>
+                <h2 className={`text-xl font-bold mb-6 border-b border-slate-700 pb-2 ${editingId ? 'text-amber-400' : 'text-white'}`}>
+                    {editingId ? "✏️ Editar Producto" : "➕ Nuevo Producto"}
+                </h2>
                 
                 <div className="grid grid-cols-1 md:grid-cols-4 lg:grid-cols-5 gap-4 mb-6">
                     {/* Select de Categoría */}
@@ -191,6 +224,12 @@ export default function Productos() {
                         <label className="block text-sm text-slate-400 mb-1">Cantidad comprada*</label>
                         <input required type="number" min="1" value={cantidad} onChange={e => setCantidad(e.target.value)} className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-indigo-500" />
                     </div>
+                    {editingId && (
+                        <div>
+                            <label className="block text-sm text-amber-300 font-bold mb-1">Stock Actual (Editar)*</label>
+                            <input required type="number" min="0" value={stockEdit} onChange={e => setStockEdit(e.target.value)} className="w-full bg-amber-900/30 border border-amber-500/50 rounded-lg px-3 py-2 text-white font-bold focus:outline-none focus:border-amber-400" />
+                        </div>
+                    )}
                     <div>
                         <label className="block text-sm text-slate-400 mb-1">Precio Compra Marcado*</label>
                         <input required type="number" step="0.01" value={precioCompra} onChange={e => setPrecioCompra(e.target.value)} className="w-full bg-slate-900/50 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-indigo-500" />
@@ -219,13 +258,22 @@ export default function Productos() {
                     </div>
                 </div>
 
-                <div className="flex justify-end">
+                <div className="flex justify-end gap-4">
+                    {editingId && (
+                        <button 
+                            type="button" 
+                            onClick={cancelarEdicion}
+                            className="bg-slate-700 hover:bg-slate-600 text-slate-300 px-6 py-2 rounded-lg font-medium transition-colors"
+                        >
+                            Cancelar
+                        </button>
+                    )}
                     <button 
                         type="submit" 
                         disabled={isSaving}
-                        className="bg-indigo-600 hover:bg-indigo-500 text-white px-8 py-2 rounded-lg font-medium transition-colors disabled:opacity-50"
+                        className={`${editingId ? 'bg-amber-600 hover:bg-amber-500' : 'bg-indigo-600 hover:bg-indigo-500'} text-white px-8 py-2 rounded-lg font-medium transition-colors disabled:opacity-50`}
                     >
-                        {isSaving ? "Guardando..." : "Guardar Producto"}
+                        {isSaving ? "Guardando..." : (editingId ? "Guardar Cambios" : "Guardar Producto")}
                     </button>
                 </div>
             </form>
@@ -275,12 +323,20 @@ export default function Productos() {
                                         ${ganancia.toFixed(2)}
                                     </td>
                                     <td className="p-3">
-                                        <button 
-                                            onClick={() => eliminarProducto(p.id)}
-                                            className="text-rose-400 hover:text-rose-300 transition-colors"
-                                        >
-                                            Eliminar
-                                        </button>
+                                        <div className="flex flex-col gap-2">
+                                            <button 
+                                                onClick={() => cargarParaEditar(p)}
+                                                className="text-amber-400 hover:text-amber-300 transition-colors text-xs font-bold bg-amber-400/10 px-2 py-1 rounded"
+                                            >
+                                                Editar
+                                            </button>
+                                            <button 
+                                                onClick={() => eliminarProducto(p.id)}
+                                                className="text-rose-400 hover:text-rose-300 transition-colors text-xs font-bold bg-rose-400/10 px-2 py-1 rounded"
+                                            >
+                                                Eliminar
+                                            </button>
+                                        </div>
                                     </td>
                                 </tr>
                             )

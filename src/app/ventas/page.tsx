@@ -31,6 +31,8 @@ type Venta = {
     productos_vendidos: ProductoEnCarrito[]
     created_at: string
     estado_pago: string
+    abono?: number
+    comentario?: string
 }
 
 export default function Ventas() {
@@ -45,6 +47,8 @@ export default function Ventas() {
     const [cliente, setCliente] = useState("")
     const [carrito, setCarrito] = useState<ProductoEnCarrito[]>([])
     const [estadoPago, setEstadoPago] = useState("Pagado")
+    const [abonoInput, setAbonoInput] = useState("")
+    const [comentario, setComentario] = useState("")
     const [isProcessing, setIsProcessing] = useState(false)
 
     // States for Adding Product to Cart
@@ -52,6 +56,11 @@ export default function Ventas() {
     const [selectedProductoId, setSelectedProductoId] = useState("")
     const [cantidadSelect, setCantidadSelect] = useState("1")
     const [precioUnitarioEdit, setPrecioUnitarioEdit] = useState("")
+
+    // States for Editing/Deleting Sale
+    const [editandoVentaId, setEditandoVentaId] = useState<string | null>(null)
+    const [editVentaCliente, setEditVentaCliente] = useState("")
+    const [editVentaComentario, setEditVentaComentario] = useState("")
 
     useEffect(() => {
         const checkAuthAndLoad = async () => {
@@ -160,12 +169,18 @@ export default function Ventas() {
 
         setIsProcessing(true)
 
+        // Procesar Abono
+        // Si es "Pagado", asumimos que abonó la totalidad. Si es "Pendiente", abonó lo que haya escrito.
+        const abonoValor = estadoPago === "Pagado" ? totalVentaActual : (parseFloat(abonoInput) || 0)
+
         // 1. Guardar la venta en la tabla 'ventas' (en JSONB)
         const nuevaVenta = {
             cliente,
             total: totalVentaActual,
-            productos_vendidos: carrito, // Supabase lo convierte en JSON automáticamente
-            estado_pago: estadoPago
+            productos_vendidos: carrito,
+            estado_pago: estadoPago,
+            abono: abonoValor,
+            comentario: comentario.trim() || null
         }
 
         const { data: ventaAgregada, error: errorVenta } = await supabase
@@ -199,24 +214,81 @@ export default function Ventas() {
         setCliente("")
         setCarrito([])
         setEstadoPago("Pagado")
+        setAbonoInput("")
+        setComentario("")
         fetchInitialData() // Trae los nuevos stocks y el historial actualizado
         setIsProcessing(false)
     }
 
-    // Marcar una reserva como pagada
-    const marcarComoPagado = async (id: string) => {
-        const confirmar = window.confirm("¿Marcar esta deuda como Pagada?")
+    // Marcar una reserva como pagada en tu totalidad
+    const marcarComoPagado = async (venta: Venta) => {
+        const confirmar = window.confirm(`El cliente debe $${(venta.total - (venta.abono || 0)).toFixed(2)}. ¿Confirmas que acaba de cancelar la totalidad de la deuda?`)
         if (!confirmar) return
 
         const { error } = await supabase
             .from("ventas")
-            .update({ estado_pago: "Pagado" })
-            .eq("id", id)
+            .update({ 
+                estado_pago: "Pagado", 
+                abono: venta.total // Al pagarlo todo, el abono se vuelve igual al total
+            })
+            .eq("id", venta.id)
         
         if (error) {
             alert("Error al actualizar: " + error.message)
         } else {
             fetchInitialData()
+        }
+    }
+
+    const iniciarEdicionVenta = (v: Venta) => {
+        setEditandoVentaId(v.id)
+        setEditVentaCliente(v.cliente)
+        setEditVentaComentario(v.comentario || "")
+    }
+
+    const guardarEdicionVenta = async (v: Venta) => {
+        const confirmacion = window.confirm("¿Guardar los cambios de los datos de esta venta?")
+        if (!confirmacion) return
+
+        const { error } = await supabase.from('ventas').update({
+            cliente: editVentaCliente,
+            comentario: editVentaComentario
+        }).eq('id', v.id)
+
+        if (!error) {
+            setEditandoVentaId(null)
+            fetchInitialData()
+        } else {
+            alert("Error al actualizar: " + error.message)
+        }
+    }
+
+    const anularVentaYDovolverStock = async (v: Venta) => {
+        const confirmacion = window.confirm("💥 ADVERTENCIA 💥\n\n¿Estás SEGURO de que deseas ANULAR toda esta venta?\n\nAl hacerlo:\n1. La venta se borrará del historial para siempre.\n2. Todos los productos volverán a sumarse al inventario de Stock.\n\nEsta acción NO se puede deshacer.")
+        if (!confirmacion) return
+        
+        // 1. Devolver Stock (Consultando directamente la BD para productos en stock cero)
+        for (const item of v.productos_vendidos) {
+            const { data: prodData } = await supabase
+                .from('productos')
+                .select('stock')
+                .eq('id', item.producto_id)
+                .single()
+                
+            if (prodData) {
+                const nuevoStock = prodData.stock + item.cantidad
+                await supabase.from('productos').update({ stock: nuevoStock }).eq('id', item.producto_id)
+            }
+        }
+
+        // 2. Eliminar la venta de la base de datos
+        const { error } = await supabase.from('ventas').delete().eq('id', v.id)
+        if (!error) {
+            setEditandoVentaId(null)
+            fetchInitialData()
+            alert("Venta Anulada Exitosamente. El stock ha sido retornado.")
+        } else {
+            alert("Error al anular venta: " + error.message)
         }
     }
 
@@ -405,24 +477,76 @@ export default function Ventas() {
                     </div>
 
                     <form onSubmit={procesarVenta}>
-                        <div className="bg-slate-900/40 p-5 rounded-xl border border-slate-700/50 mb-6">
-                            <label className="block text-sm text-slate-400 mb-2">Estado del Pago</label>
-                            <div className="grid grid-cols-2 gap-4">
-                                <button
-                                    type="button"
-                                    onClick={() => setEstadoPago("Pagado")}
-                                    className={`py-3 rounded-lg font-bold border transition-colors ${estadoPago === 'Pagado' ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'}`}
-                                >
-                                    ✅ Pagado Hoy
-                                </button>
-                                <button
-                                    type="button"
-                                    onClick={() => setEstadoPago("Pendiente")}
-                                    className={`py-3 rounded-lg font-bold border transition-colors ${estadoPago === 'Pendiente' ? 'bg-orange-600 border-orange-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'}`}
-                                >
-                                    ⏳ Reservar (Por cobrar)
-                                </button>
+                        <div className="bg-slate-900/40 p-5 rounded-xl border border-slate-700/50 mb-6 flex flex-col gap-4">
+                            <div>
+                                <label className="block text-sm text-slate-400 mb-2">Estado de la Venta</label>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            setEstadoPago("Pagado")
+                                            setAbonoInput("")
+                                        }}
+                                        className={`py-3 rounded-lg font-bold border transition-colors ${estadoPago === 'Pagado' ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'}`}
+                                    >
+                                        ✅ Pagado Completo
+                                    </button>
+                                    <button
+                                        type="button"
+                                        onClick={() => setEstadoPago("Pendiente")}
+                                        className={`py-3 rounded-lg font-bold border transition-colors ${estadoPago === 'Pendiente' ? 'bg-orange-600 border-orange-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'}`}
+                                    >
+                                        ⏳ Reservar (Monto Parcial)
+                                    </button>
+                                </div>
                             </div>
+
+                            {/* Caja extra si es Reserva */}
+                            {estadoPago === "Pendiente" && (
+                                <div className="p-4 bg-orange-900/20 border border-orange-500/30 rounded-lg flex flex-col gap-4 mt-2">
+                                    <div>
+                                        <label className="block text-sm text-orange-300 font-semibold mb-1">¿Cuánto dejó de Abono Inicial? ($)</label>
+                                        <input 
+                                            type="number" 
+                                            step="0.01" 
+                                            min="0"
+                                            value={abonoInput}
+                                            onChange={(e) => setAbonoInput(e.target.value)}
+                                            placeholder="Ej. 20.00"
+                                            className="w-full bg-slate-900/80 border border-orange-500/50 rounded-lg px-3 py-2 text-white font-bold max-w-[200px]"
+                                        />
+                                        {abonoInput && (
+                                            <p className="text-orange-400 text-sm mt-2 font-bold">
+                                                🚨 Saldo Restante (Deuda): ${(totalVentaActual - parseFloat(abonoInput)).toFixed(2)}
+                                            </p>
+                                        )}
+                                    </div>
+                                    <div>
+                                        <label className="block text-sm text-slate-400 mb-1">Comandos extras (Opcional)</label>
+                                        <input 
+                                            type="text" 
+                                            value={comentario}
+                                            onChange={(e) => setComentario(e.target.value)}
+                                            placeholder="Ej. Dijo que viene el sábado a pagar..."
+                                            className="w-full bg-slate-900/80 border border-slate-700 rounded-lg px-3 py-2 text-slate-300 text-sm"
+                                        />
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Solo comentarios si es pagado */}
+                            {estadoPago === "Pagado" && (
+                                <div>
+                                    <label className="block text-sm text-slate-400 mb-1">Notas (Opcional)</label>
+                                    <input 
+                                        type="text" 
+                                        value={comentario}
+                                        onChange={(e) => setComentario(e.target.value)}
+                                        placeholder="Alguna anotación sobre esta venta..."
+                                        className="w-full bg-slate-900/80 border border-slate-700 rounded-lg px-3 py-2 text-slate-300 text-sm"
+                                    />
+                                </div>
+                            )}
                         </div>
 
                         <button 
@@ -446,9 +570,10 @@ export default function Ventas() {
                             <tr className="border-b border-slate-700 bg-slate-800/50">
                                 <th className="p-4 font-semibold text-slate-200">Fecha y Hora</th>
                                 <th className="p-4 font-semibold text-slate-200">Cliente</th>
-                                <th className="p-4 font-semibold text-slate-200">Detalle de Productos</th>
-                                <th className="p-4 font-semibold text-emerald-400 text-right">Total Cobrado</th>
-                                <th className="p-4 font-semibold text-slate-200 text-center">Estado</th>
+                                <th className="p-4 font-semibold text-slate-200">Detalle</th>
+                                <th className="p-4 font-semibold text-emerald-400 text-right">Monto Total</th>
+                                <th className="p-4 font-semibold text-slate-200 text-right">Abonos / Saldos</th>
+                                <th className="p-4 font-semibold text-slate-200 text-center">Gestión</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -460,7 +585,29 @@ export default function Ventas() {
                                             hour: '2-digit', minute:'2-digit'
                                         })}
                                     </td>
-                                    <td className="p-4 font-medium text-white text-lg">{v.cliente}</td>
+                                    <td className="p-4">
+                                        {editandoVentaId === v.id ? (
+                                            <div className="flex flex-col gap-2">
+                                                <input 
+                                                    className="bg-slate-900 border border-indigo-500 rounded px-2 py-1 text-white text-sm" 
+                                                    value={editVentaCliente} 
+                                                    onChange={e => setEditVentaCliente(e.target.value)} 
+                                                    placeholder="Cliente..."
+                                                />
+                                                <input 
+                                                    className="bg-slate-900 border border-indigo-500 rounded px-2 py-1 text-sky-400 text-xs italic" 
+                                                    value={editVentaComentario} 
+                                                    onChange={e => setEditVentaComentario(e.target.value)} 
+                                                    placeholder="Notas / Comentarios..."
+                                                />
+                                            </div>
+                                        ) : (
+                                            <>
+                                                <p className="font-medium text-white text-lg">{v.cliente}</p>
+                                                {v.comentario && <p className="text-xs text-sky-400 mt-1 italic">"{v.comentario}"</p>}
+                                            </>
+                                        )}
+                                    </td>
                                     <td className="p-4 text-slate-300">
                                         <ul className="list-disc list-inside">
                                             {v.productos_vendidos.map((prod, i) => (
@@ -470,24 +617,61 @@ export default function Ventas() {
                                             ))}
                                         </ul>
                                     </td>
-                                    <td className="p-4 font-bold text-emerald-400 text-xl text-right">${v.total.toFixed(2)}</td>
-                                    <td className="p-4 text-center">
+                                    <td className="p-4 font-bold text-slate-300 text-xl text-right">${v.total.toFixed(2)}</td>
+                                    
+                                    {/* Celda Especial de Cálculo de Deuda */}
+                                    <td className="p-4 text-right">
                                         {v.estado_pago === 'Pendiente' ? (
-                                            <div className="flex flex-col items-center gap-2">
-                                                <span className="bg-orange-500/20 text-orange-400 border border-orange-500/50 px-3 py-1 rounded-full text-xs font-bold">
-                                                    ⏳ Reserva / Debe
+                                            <div className="flex flex-col items-end">
+                                                <span className="text-emerald-400 text-sm font-semibold">Abonó: ${(v.abono || 0).toFixed(2)}</span>
+                                                <span className="text-rose-400 font-bold mt-1">
+                                                    Debe: ${(v.total - (v.abono || 0)).toFixed(2)}
                                                 </span>
-                                                <button 
-                                                    onClick={() => marcarComoPagado(v.id)}
-                                                    className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1 rounded-lg font-bold transition-colors"
-                                                >
-                                                    Marcar Pagado
+                                            </div>
+                                        ) : (
+                                            <span className="text-emerald-500 text-sm font-semibold">Total Cancelado</span>
+                                        )}
+                                    </td>
+
+                                    <td className="p-4 text-center">
+                                        {editandoVentaId === v.id ? (
+                                            <div className="flex flex-col gap-2">
+                                                <button onClick={() => guardarEdicionVenta(v)} className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-2 py-1.5 rounded-lg font-bold">
+                                                    💾 Guardar Textos
+                                                </button>
+                                                <button onClick={() => setEditandoVentaId(null)} className="bg-slate-700 hover:bg-slate-600 text-white text-xs px-2 py-1.5 rounded-lg font-bold">
+                                                    Cancelar
+                                                </button>
+                                                <button onClick={() => anularVentaYDovolverStock(v)} className="bg-rose-600/20 text-rose-500 hover:bg-rose-600 hover:text-white border border-rose-500 text-xs px-2 py-1.5 rounded-lg font-bold mt-2 transition-colors">
+                                                    💥 Anular y Retornar Stock
                                                 </button>
                                             </div>
                                         ) : (
-                                            <span className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 px-3 py-1 rounded-full text-xs font-bold">
-                                                ✅ Pagado
-                                            </span>
+                                            <div className="flex flex-col items-center gap-2">
+                                                {v.estado_pago === 'Pendiente' ? (
+                                                    <>
+                                                        <span className="bg-orange-500/20 text-orange-400 border border-orange-500/50 px-3 py-1 rounded-full text-xs font-bold">
+                                                            ⏳ Reserva / Debe
+                                                        </span>
+                                                        <button 
+                                                            onClick={() => marcarComoPagado(v)}
+                                                            className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1 rounded-lg font-bold transition-colors"
+                                                        >
+                                                            Pagar Saldo
+                                                        </button>
+                                                    </>
+                                                ) : (
+                                                    <span className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 px-3 py-1 rounded-full text-xs font-bold">
+                                                        ✅ Completo
+                                                    </span>
+                                                )}
+                                                <button 
+                                                    onClick={() => iniciarEdicionVenta(v)} 
+                                                    className="text-slate-400 hover:text-indigo-400 text-xs font-semibold mt-2 underline transition-colors"
+                                                >
+                                                    ⚙️ Editar / Anular
+                                                </button>
+                                            </div>
                                         )}
                                     </td>
                                 </tr>
