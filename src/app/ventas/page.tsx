@@ -30,6 +30,7 @@ type Venta = {
     total: number
     productos_vendidos: ProductoEnCarrito[]
     created_at: string
+    estado_pago: string
 }
 
 export default function Ventas() {
@@ -43,6 +44,7 @@ export default function Ventas() {
     // States for New Sale
     const [cliente, setCliente] = useState("")
     const [carrito, setCarrito] = useState<ProductoEnCarrito[]>([])
+    const [estadoPago, setEstadoPago] = useState("Pagado")
     const [isProcessing, setIsProcessing] = useState(false)
 
     // States for Adding Product to Cart
@@ -162,7 +164,8 @@ export default function Ventas() {
         const nuevaVenta = {
             cliente,
             total: totalVentaActual,
-            productos_vendidos: carrito // Supabase lo convierte en JSON automáticamente
+            productos_vendidos: carrito, // Supabase lo convierte en JSON automáticamente
+            estado_pago: estadoPago
         }
 
         const { data: ventaAgregada, error: errorVenta } = await supabase
@@ -195,8 +198,26 @@ export default function Ventas() {
         // Limpiar todo y refrescar datos
         setCliente("")
         setCarrito([])
+        setEstadoPago("Pagado")
         fetchInitialData() // Trae los nuevos stocks y el historial actualizado
         setIsProcessing(false)
+    }
+
+    // Marcar una reserva como pagada
+    const marcarComoPagado = async (id: string) => {
+        const confirmar = window.confirm("¿Marcar esta deuda como Pagada?")
+        if (!confirmar) return
+
+        const { error } = await supabase
+            .from("ventas")
+            .update({ estado_pago: "Pagado" })
+            .eq("id", id)
+        
+        if (error) {
+            alert("Error al actualizar: " + error.message)
+        } else {
+            fetchInitialData()
+        }
     }
 
     if (loading && inventario.length === 0) {
@@ -384,12 +405,32 @@ export default function Ventas() {
                     </div>
 
                     <form onSubmit={procesarVenta}>
+                        <div className="bg-slate-900/40 p-5 rounded-xl border border-slate-700/50 mb-6">
+                            <label className="block text-sm text-slate-400 mb-2">Estado del Pago</label>
+                            <div className="grid grid-cols-2 gap-4">
+                                <button
+                                    type="button"
+                                    onClick={() => setEstadoPago("Pagado")}
+                                    className={`py-3 rounded-lg font-bold border transition-colors ${estadoPago === 'Pagado' ? 'bg-emerald-600 border-emerald-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'}`}
+                                >
+                                    ✅ Pagado Hoy
+                                </button>
+                                <button
+                                    type="button"
+                                    onClick={() => setEstadoPago("Pendiente")}
+                                    className={`py-3 rounded-lg font-bold border transition-colors ${estadoPago === 'Pendiente' ? 'bg-orange-600 border-orange-500 text-white' : 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700'}`}
+                                >
+                                    ⏳ Reservar (Por cobrar)
+                                </button>
+                            </div>
+                        </div>
+
                         <button 
                             type="submit"
                             disabled={isProcessing || carrito.length === 0}
-                            className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-lg py-4 rounded-xl transition-all shadow-lg shadow-emerald-500/20 flex justify-center items-center gap-2 transform hover:scale-[1.02] active:scale-95 disabled:scale-100 disabled:opacity-50 disabled:shadow-none"
+                            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-lg py-4 rounded-xl transition-all shadow-lg shadow-indigo-500/20 flex justify-center items-center gap-2 transform hover:scale-[1.02] active:scale-95 disabled:scale-100 disabled:opacity-50 disabled:shadow-none"
                         >
-                            {isProcessing ? "Registrando Venta..." : "💵 Procesar y Confirmar Venta"}
+                            {isProcessing ? "Registrando Venta..." : "💾 Procesar y Confirmar"}
                         </button>
                     </form>
                 </div>
@@ -407,6 +448,7 @@ export default function Ventas() {
                                 <th className="p-4 font-semibold text-slate-200">Cliente</th>
                                 <th className="p-4 font-semibold text-slate-200">Detalle de Productos</th>
                                 <th className="p-4 font-semibold text-emerald-400 text-right">Total Cobrado</th>
+                                <th className="p-4 font-semibold text-slate-200 text-center">Estado</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -429,6 +471,25 @@ export default function Ventas() {
                                         </ul>
                                     </td>
                                     <td className="p-4 font-bold text-emerald-400 text-xl text-right">${v.total.toFixed(2)}</td>
+                                    <td className="p-4 text-center">
+                                        {v.estado_pago === 'Pendiente' ? (
+                                            <div className="flex flex-col items-center gap-2">
+                                                <span className="bg-orange-500/20 text-orange-400 border border-orange-500/50 px-3 py-1 rounded-full text-xs font-bold">
+                                                    ⏳ Reserva / Debe
+                                                </span>
+                                                <button 
+                                                    onClick={() => marcarComoPagado(v.id)}
+                                                    className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1 rounded-lg font-bold transition-colors"
+                                                >
+                                                    Marcar Pagado
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <span className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 px-3 py-1 rounded-full text-xs font-bold">
+                                                ✅ Pagado
+                                            </span>
+                                        )}
+                                    </td>
                                 </tr>
                             ))}
                             {ventasHistorial.length === 0 && (
