@@ -82,6 +82,17 @@ export default function Dashboard() {
                     <h2 className="text-xl font-bold mb-2">Reportes</h2>
                     <p className="text-slate-400 text-sm">Visualiza métricas, ganancias, productos más vendidos y alertas de stock.</p>
                 </div>
+
+                <div 
+                    onClick={() => router.push("/catalogo")}
+                    className="glass-panel p-6 rounded-2xl cursor-pointer hover:-translate-y-1 transition-all group border border-amber-500/30"
+                >
+                    <div className="w-12 h-12 bg-amber-500/20 text-amber-400 rounded-xl flex items-center justify-center text-2xl mb-4 group-hover:scale-110 transition-transform">
+                        📱
+                    </div>
+                    <h2 className="text-xl font-bold mb-2">Catálogo / Clientes</h2>
+                    <p className="text-slate-400 text-sm">Busca productos rápido para mostrarle a un cliente sin revelar tus costos reales.</p>
+                </div>
             </div>
         </main>
     )
