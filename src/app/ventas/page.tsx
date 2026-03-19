@@ -59,8 +59,6 @@ export default function Ventas() {
 
     // States for Editing/Deleting Sale
     const [editandoVentaId, setEditandoVentaId] = useState<string | null>(null)
-    const [editVentaCliente, setEditVentaCliente] = useState("")
-    const [editVentaComentario, setEditVentaComentario] = useState("")
 
     useEffect(() => {
         const checkAuthAndLoad = async () => {
@@ -161,6 +159,16 @@ export default function Ventas() {
 
     const totalVentaActual = carrito.reduce((acc, item) => acc + item.subtotal, 0)
 
+    // Limpiar formulario y carrito
+    const limpiarFormulario = () => {
+        setEditandoVentaId(null)
+        setCliente("")
+        setCarrito([])
+        setEstadoPago("Pagado")
+        setAbonoInput("")
+        setComentario("")
+    }
+
     // Ejecutar Venta: Guardar DB y descontar Stock
     const procesarVenta = async (e: React.FormEvent) => {
         e.preventDefault()
@@ -170,11 +178,10 @@ export default function Ventas() {
         setIsProcessing(true)
 
         // Procesar Abono
-        // Si es "Pagado", asumimos que abonó la totalidad. Si es "Pendiente", abonó lo que haya escrito.
         const abonoValor = estadoPago === "Pagado" ? totalVentaActual : (parseFloat(abonoInput) || 0)
 
-        // 1. Guardar la venta en la tabla 'ventas' (en JSONB)
-        const nuevaVenta = {
+        // Data central
+        const dataVenta = {
             cliente,
             total: totalVentaActual,
             productos_vendidos: carrito,
@@ -183,40 +190,65 @@ export default function Ventas() {
             comentario: comentario.trim() || null
         }
 
-        const { data: ventaAgregada, error: errorVenta } = await supabase
-            .from("ventas")
-            .insert([nuevaVenta])
-            .select()
-
-        if (errorVenta) {
-            alert("Error al registrar venta (¿Creaste la tabla en Supabase?): " + errorVenta.message)
-            setIsProcessing(false)
-            return
-        }
-
-        // 2. Descontar Stock por cada producto vendido
-        for (const item of carrito) {
-            // Buscamos el stock anterior localmente para hacer una resta exacta
-            const prod = inventario.find(p => p.id === item.producto_id)
-            if (prod) {
-                const nuevoStock = prod.stock - item.cantidad
-                await supabase
-                    .from("productos")
-                    .update({ stock: nuevoStock })
-                    .eq("id", item.producto_id)
+        if (editandoVentaId) {
+            // --- MODO ACTUALIZAR ---
+            const oldVenta = ventasHistorial.find(v => v.id === editandoVentaId)
+            
+            if (oldVenta) {
+                // Calcular Diffs de Stock
+                const stockDiffs: Record<string, number> = {} // id -> (nuevo - viejo)
+                for (const item of oldVenta.productos_vendidos) {
+                    stockDiffs[item.producto_id] = -(item.cantidad)
+                }
+                for (const item of carrito) {
+                    stockDiffs[item.producto_id] = (stockDiffs[item.producto_id] || 0) + item.cantidad
+                }
+                
+                // Aplicar diffs
+                for (const [prodId, diff] of Object.entries(stockDiffs)) {
+                    if (diff !== 0) {
+                        const { data: prodData } = await supabase.from('productos').select('stock').eq('id', prodId).single()
+                        if (prodData) {
+                            // diff positivo = sacamos más del stock = (stock_actual - diff)
+                            // diff negativo = devolvimos al stock (resta de un negativo es suma)
+                            await supabase.from('productos').update({ stock: prodData.stock - diff }).eq('id', prodId)
+                        }
+                    }
+                }
             }
-        }
 
-        // Venta exitosa
-        alert("¡Venta registrada exitosamente!")
+            // Actualizar DB
+            const { error: errorUpdate } = await supabase.from('ventas').update(dataVenta).eq('id', editandoVentaId)
+            
+            if (errorUpdate) {
+                alert("Error al actualizar la venta: " + errorUpdate.message)
+            } else {
+                alert("¡Orden actualizada exitosamente!")
+            }
+
+        } else {
+            // --- MODO CREAR NUEVO ---
+            const { error: errorVenta } = await supabase.from("ventas").insert([dataVenta])
+
+            if (errorVenta) {
+                alert("Error al registrar venta (¿Creaste la tabla en Supabase?): " + errorVenta.message)
+                setIsProcessing(false)
+                return
+            }
+
+            // Descontar Stock por cada producto vendido (Directo BD)
+            for (const item of carrito) {
+                const { data: prodData } = await supabase.from('productos').select('stock').eq('id', item.producto_id).single()
+                if (prodData) {
+                    await supabase.from("productos").update({ stock: prodData.stock - item.cantidad }).eq("id", item.producto_id)
+                }
+            }
+
+            alert("¡Venta registrada exitosamente!")
+        }
         
-        // Limpiar todo y refrescar datos
-        setCliente("")
-        setCarrito([])
-        setEstadoPago("Pagado")
-        setAbonoInput("")
-        setComentario("")
-        fetchInitialData() // Trae los nuevos stocks y el historial actualizado
+        limpiarFormulario()
+        fetchInitialData() // Trae historial y stock actualizados
         setIsProcessing(false)
     }
 
@@ -242,25 +274,12 @@ export default function Ventas() {
 
     const iniciarEdicionVenta = (v: Venta) => {
         setEditandoVentaId(v.id)
-        setEditVentaCliente(v.cliente)
-        setEditVentaComentario(v.comentario || "")
-    }
-
-    const guardarEdicionVenta = async (v: Venta) => {
-        const confirmacion = window.confirm("¿Guardar los cambios de los datos de esta venta?")
-        if (!confirmacion) return
-
-        const { error } = await supabase.from('ventas').update({
-            cliente: editVentaCliente,
-            comentario: editVentaComentario
-        }).eq('id', v.id)
-
-        if (!error) {
-            setEditandoVentaId(null)
-            fetchInitialData()
-        } else {
-            alert("Error al actualizar: " + error.message)
-        }
+        setCliente(v.cliente)
+        setCarrito(v.productos_vendidos)
+        setEstadoPago(v.estado_pago)
+        setAbonoInput(v.abono ? v.abono.toString() : "")
+        setComentario(v.comentario || "")
+        window.scrollTo({ top: 0, behavior: 'smooth' })
     }
 
     const anularVentaYDovolverStock = async (v: Venta) => {
@@ -321,8 +340,15 @@ export default function Ventas() {
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
                 
                 {/* LADO IZQUIERDO: AGREGAR PRODUCTOS */}
-                <div className="glass-panel p-6 rounded-2xl flex flex-col gap-6 self-start relative z-10 w-full">
-                    <h2 className="text-xl font-bold text-white border-b border-slate-700 pb-2">🛒 Generar Venta</h2>
+                <div className={`glass-panel p-6 rounded-2xl flex flex-col gap-6 self-start relative z-10 w-full ${editandoVentaId ? 'border-2 border-indigo-500 shadow-lg shadow-indigo-500/20' : ''}`}>
+                    <h2 className="text-xl font-bold text-white border-b border-slate-700 pb-2 flex justify-between items-center">
+                        <span>{editandoVentaId ? "✏️ Editando Venta Activa" : "🛒 Generar Venta"}</span>
+                        {editandoVentaId && (
+                            <button onClick={limpiarFormulario} className="text-xs bg-slate-700 hover:bg-slate-600 px-3 py-1 rounded-lg text-white">
+                                ❌ Cancelar Edición
+                            </button>
+                        )}
+                    </h2>
 
                     <div className="bg-slate-900/40 p-5 rounded-xl border border-slate-700/50">
                         <label className="block text-sm text-slate-400 mb-1">Nombre del Cliente*</label>
@@ -552,9 +578,9 @@ export default function Ventas() {
                         <button 
                             type="submit"
                             disabled={isProcessing || carrito.length === 0}
-                            className="w-full bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-lg py-4 rounded-xl transition-all shadow-lg shadow-indigo-500/20 flex justify-center items-center gap-2 transform hover:scale-[1.02] active:scale-95 disabled:scale-100 disabled:opacity-50 disabled:shadow-none"
+                            className={`w-full text-white font-bold text-lg py-4 rounded-xl transition-all shadow-lg flex justify-center items-center gap-2 transform hover:scale-[1.02] active:scale-95 disabled:scale-100 disabled:opacity-50 disabled:shadow-none ${editandoVentaId ? 'bg-indigo-600 hover:bg-indigo-500 shadow-indigo-500/20' : 'bg-emerald-600 hover:bg-emerald-500 shadow-emerald-500/20'}`}
                         >
-                            {isProcessing ? "Registrando Venta..." : "💾 Procesar y Confirmar"}
+                            {isProcessing ? "Procesando..." : editandoVentaId ? "💾 Guardar Edición Completa" : "✅ Procesar y Confirmar"}
                         </button>
                     </form>
                 </div>
@@ -586,27 +612,8 @@ export default function Ventas() {
                                         })}
                                     </td>
                                     <td className="p-4">
-                                        {editandoVentaId === v.id ? (
-                                            <div className="flex flex-col gap-2">
-                                                <input 
-                                                    className="bg-slate-900 border border-indigo-500 rounded px-2 py-1 text-white text-sm" 
-                                                    value={editVentaCliente} 
-                                                    onChange={e => setEditVentaCliente(e.target.value)} 
-                                                    placeholder="Cliente..."
-                                                />
-                                                <input 
-                                                    className="bg-slate-900 border border-indigo-500 rounded px-2 py-1 text-sky-400 text-xs italic" 
-                                                    value={editVentaComentario} 
-                                                    onChange={e => setEditVentaComentario(e.target.value)} 
-                                                    placeholder="Notas / Comentarios..."
-                                                />
-                                            </div>
-                                        ) : (
-                                            <>
-                                                <p className="font-medium text-white text-lg">{v.cliente}</p>
-                                                {v.comentario && <p className="text-xs text-sky-400 mt-1 italic">"{v.comentario}"</p>}
-                                            </>
-                                        )}
+                                        <p className="font-medium text-white text-lg">{v.cliente}</p>
+                                        {v.comentario && <p className="text-xs text-sky-400 mt-1 italic">"{v.comentario}"</p>}
                                     </td>
                                     <td className="p-4 text-slate-300">
                                         <ul className="list-disc list-inside">
@@ -619,7 +626,6 @@ export default function Ventas() {
                                     </td>
                                     <td className="p-4 font-bold text-slate-300 text-xl text-right">${v.total.toFixed(2)}</td>
                                     
-                                    {/* Celda Especial de Cálculo de Deuda */}
                                     <td className="p-4 text-right">
                                         {v.estado_pago === 'Pendiente' ? (
                                             <div className="flex flex-col items-end">
@@ -634,45 +640,41 @@ export default function Ventas() {
                                     </td>
 
                                     <td className="p-4 text-center">
-                                        {editandoVentaId === v.id ? (
-                                            <div className="flex flex-col gap-2">
-                                                <button onClick={() => guardarEdicionVenta(v)} className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs px-2 py-1.5 rounded-lg font-bold">
-                                                    💾 Guardar Textos
-                                                </button>
-                                                <button onClick={() => setEditandoVentaId(null)} className="bg-slate-700 hover:bg-slate-600 text-white text-xs px-2 py-1.5 rounded-lg font-bold">
-                                                    Cancelar
-                                                </button>
-                                                <button onClick={() => anularVentaYDovolverStock(v)} className="bg-rose-600/20 text-rose-500 hover:bg-rose-600 hover:text-white border border-rose-500 text-xs px-2 py-1.5 rounded-lg font-bold mt-2 transition-colors">
-                                                    💥 Anular y Retornar Stock
-                                                </button>
-                                            </div>
-                                        ) : (
-                                            <div className="flex flex-col items-center gap-2">
-                                                {v.estado_pago === 'Pendiente' ? (
-                                                    <>
-                                                        <span className="bg-orange-500/20 text-orange-400 border border-orange-500/50 px-3 py-1 rounded-full text-xs font-bold">
-                                                            ⏳ Reserva / Debe
-                                                        </span>
-                                                        <button 
-                                                            onClick={() => marcarComoPagado(v)}
-                                                            className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1 rounded-lg font-bold transition-colors"
-                                                        >
-                                                            Pagar Saldo
-                                                        </button>
-                                                    </>
-                                                ) : (
-                                                    <span className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 px-3 py-1 rounded-full text-xs font-bold">
-                                                        ✅ Completo
+                                        <div className="flex flex-col items-center gap-2">
+                                            {v.estado_pago === 'Pendiente' ? (
+                                                <>
+                                                    <span className="bg-orange-500/20 text-orange-400 border border-orange-500/50 px-3 py-1 rounded-full text-xs font-bold">
+                                                        ⏳ Reserva / Debe
                                                     </span>
-                                                )}
+                                                    <button 
+                                                        onClick={() => marcarComoPagado(v)}
+                                                        className="bg-emerald-600 hover:bg-emerald-500 text-white text-xs px-3 py-1 rounded-lg font-bold transition-colors"
+                                                    >
+                                                        Pagar Saldo
+                                                    </button>
+                                                </>
+                                            ) : (
+                                                <span className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/50 px-3 py-1 rounded-full text-xs font-bold">
+                                                    ✅ Completo
+                                                </span>
+                                            )}
+                                            
+                                            <div className="flex gap-2 mt-2">
                                                 <button 
                                                     onClick={() => iniciarEdicionVenta(v)} 
-                                                    className="text-slate-400 hover:text-indigo-400 text-xs font-semibold mt-2 underline transition-colors"
+                                                    className="bg-indigo-600/50 hover:bg-indigo-600 text-white border border-indigo-500 text-xs px-2 py-1 rounded font-semibold transition-colors flex items-center gap-1"
                                                 >
-                                                    ⚙️ Editar / Anular
+                                                    ✏️ Cargar/Editar
+                                                </button>
+                                                <button 
+                                                    onClick={() => anularVentaYDovolverStock(v)} 
+                                                    className="bg-rose-900/50 hover:bg-rose-600 text-white border border-rose-700 text-xs px-2 py-1 rounded transition-colors"
+                                                    title="Anular venta por completo"
+                                                >
+                                                    💥
                                                 </button>
                                             </div>
-                                        )}
+                                        </div>
                                     </td>
                                 </tr>
                             ))}
