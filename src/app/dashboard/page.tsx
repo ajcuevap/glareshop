@@ -72,12 +72,15 @@ export default function Dashboard() {
                     <p className="text-slate-400 text-sm">Registra nuevas ventas y descuenta automáticamente del inventario.</p>
                 </div>
 
-                <div className="glass-panel p-6 rounded-2xl opacity-60">
-                    <div className="w-12 h-12 bg-slate-500/20 text-slate-400 rounded-xl flex items-center justify-center text-2xl mb-4 p-2">
+                <div 
+                    onClick={() => router.push("/reportes")}
+                    className="glass-panel p-6 rounded-2xl cursor-pointer hover:-translate-y-1 transition-all group border border-sky-500/30"
+                >
+                    <div className="w-12 h-12 bg-sky-500/20 text-sky-400 rounded-xl flex items-center justify-center text-2xl mb-4 group-hover:scale-110 transition-transform">
                         📊
                     </div>
                     <h2 className="text-xl font-bold mb-2">Reportes</h2>
-                    <p className="text-slate-400 text-sm">Próximamente. Visualiza métricas de negocio y gráficos.</p>
+                    <p className="text-slate-400 text-sm">Visualiza métricas, ganancias, productos más vendidos y alertas de stock.</p>
                 </div>
             </div>
         </main>
